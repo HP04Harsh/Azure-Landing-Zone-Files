@@ -2,66 +2,117 @@ name: "Verify Landing Zone Request"
 
 on:
   push:
-    paths:
-      - 'terraform/**.json' # Triggers only when a JSON file is added/changed
     branches:
       - main
+    paths:
+      - 'terraform/**/*.json'   # match JSON at any depth under terraform/
 
 jobs:
   verify_data:
     name: "Parse and Display Data"
     runs-on: ubuntu-latest
-    
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # we need history to determine most-recent change
+
+      - name: Ensure jq is available
+        run: |
+          if ! command -v jq >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y jq
+          fi
+          jq --version
 
       - name: Find Latest Request File
         id: find_file
+        shell: bash
         run: |
-          # Finds the most recently modified JSON file in the requests folder
-          FILE=$(ls -t terraform/requests/*.json | head -1)
+          set -euo pipefail
+
+          # Prefer JSONs inside terraform/requests/ if that directory exists and has JSONs
+          CANDIDATES=""
+          if [[ -d "terraform/requests" ]]; then
+            # Use Git metadata to find JSONs in the push range first
+            CANDIDATES="$(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" -- 'terraform/requests/*.json' || true)"
+          fi
+
+          # Fallback to any JSON change under terraform/ in this push
+          if [[ -z "${CANDIDATES// /}" ]]; then
+            CANDIDATES="$(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" -- 'terraform/**/*.json' || true)"
+          fi
+
+          FILE=""
+          if [[ -n "${CANDIDATES// /}" ]]; then
+            # Pick the last changed file (or first). Here we pick the last line.
+            FILE="$(echo "$CANDIDATES" | tail -n 1)"
+          fi
+
+          # If still empty (e.g., manual re-run), choose the most recently committed JSON under terraform/
+          if [[ -z "${FILE:-}" ]]; then
+            FILE="$(git ls-files 'terraform/**/*.json' \
+                | xargs -r -I{} bash -c 'echo -e "$(git log -1 --format=%ct -- "{}")\t{}"' \
+                | sort -nr \
+                | head -n 1 \
+                | cut -f2- || true)"
+          fi
+
+          if [[ -z "${FILE:-}" ]]; then
+            echo "No JSON files found under terraform/. Nothing to process."
+            echo "file_path=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           echo "Processing File: $FILE"
-          echo "file_path=$FILE" >> $GITHUB_OUTPUT
+          echo "file_path=$FILE" >> "$GITHUB_OUTPUT"
 
       - name: Display Raw JSON Content
+        if: ${{ steps.find_file.outputs.file_path != '' }}
         run: |
           echo "----------------------------------------"
           echo "RAW FILE CONTENT:"
           echo "----------------------------------------"
-          cat ${{ steps.find_file.outputs.file_path }}
+          cat "${{ steps.find_file.outputs.file_path }}"
           echo ""
           echo "----------------------------------------"
 
       - name: Parse and Verify Details (JQ)
+        if: ${{ steps.find_file.outputs.file_path != '' }}
         run: |
-          FILE=${{ steps.find_file.outputs.file_path }}
-          
-          # We use 'jq' to parse the JSON and make it readable
-          # The key is dynamic (Request ID), so we look for the first key inside 'lz_request'
-          
-          REQ_ID=$(jq -r '.lz_request | keys_unsorted[0]' $FILE)
-          
+          set -euo pipefail
+          FILE="${{ steps.find_file.outputs.file_path }}"
+
+          # Extract the first key under lz_request (dynamic Request ID)
+          REQ_ID="$(jq -r '.lz_request | keys_unsorted[0] // empty' "$FILE")"
+          if [[ -z "${REQ_ID:-}" ]]; then
+            echo "❌ Could not find a top-level key under .lz_request in $FILE"
+            echo "File structure preview:"
+            jq 'keys' "$FILE" || true
+            exit 1
+          fi
+
           echo "🔍 VERIFICATION REPORT for: $REQ_ID"
           echo "========================================"
-          
-          OWNER=$(jq -r ".lz_request[\"$REQ_ID\"].metadata.owner_email" $FILE)
-          ENV=$(jq -r ".lz_request[\"$REQ_ID\"].subscription.env" $FILE)
-          COST=$(jq -r ".lz_request[\"$REQ_ID\"].metadata.cost_center" $FILE)
-          TOPOLOGY=$(jq -r ".lz_request[\"$REQ_ID\"].networking.topology" $FILE)
-          FW_REQ=$(jq -r ".lz_request[\"$REQ_ID\"].security.firewall.required" $FILE)
-          
-          echo "👤 Owner:        $OWNER"
-          echo "🌍 Environment:  $ENV"
-          echo "💰 Cost Center:  $COST"
-          echo "🕸️ Topology:     $TOPOLOGY"
-          
-          if [ "$FW_REQ" == "true" ]; then
-            FW_SKU=$(jq -r ".lz_request[\"$REQ_ID\"].security.firewall.sku" $FILE)
-            echo "🔥 Firewall:     ENABLED (SKU: $FW_SKU)"
+
+          OWNER="$(jq -r ".lz_request[\"$REQ_ID\"].metadata.owner_email // \"\"" "$FILE")"
+          ENV="$(jq -r ".lz_request[\"$REQ_ID\"].subscription.env // \"\"" "$FILE")"
+          COST="$(jq -r ".lz_request[\"$REQ_ID\"].metadata.cost_center // \"\"" "$FILE")"
+          TOPOLOGY="$(jq -r ".lz_request[\"$REQ_ID\"].networking.topology // \"\"" "$FILE")"
+          FW_REQ="$(jq -r ".lz_request[\"$REQ_ID\"].security.firewall.required // false" "$FILE")"
+
+          echo "👤 Owner:        ${OWNER:-<missing>}"
+          echo "🌍 Environment:  ${ENV:-<missing>}"
+          echo "💰 Cost Center:  ${COST:-<missing>}"
+          echo "🕸️ Topology:     ${TOPOLOGY:-<missing>}"
+
+          if [[ "$FW_REQ" == "true" ]]; then
+            FW_SKU="$(jq -r ".lz_request[\"$REQ_ID\"].security.firewall.sku // \"\"" "$FILE")"
+            echo "🔥 Firewall:     ENABLED (SKU: ${FW_SKU:-<missing>})"
           else
             echo "🔥 Firewall:     Disabled"
           fi
-          
+
           echo "========================================"
           echo "✅ Data Structure Validated Successfully"
