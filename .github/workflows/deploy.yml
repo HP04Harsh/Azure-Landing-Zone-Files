@@ -5,7 +5,7 @@ on:
     branches:
       - main
     paths:
-      - 'terraform/**/*.json'   # match JSON at any depth under terraform/
+      - 'terraform/*.json'   # match JSON at any depth under terraform/
 
 jobs:
   verify_data:
@@ -41,7 +41,7 @@ jobs:
 
           # Fallback to any JSON change under terraform/ in this push
           if [[ -z "${CANDIDATES// /}" ]]; then
-            CANDIDATES="$(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" -- 'terraform/**/*.json' || true)"
+            CANDIDATES="$(git diff --name-only "${{ github.event.before }}" "${{ github.sha }}" -- 'terraform/*.json' || true)"
           fi
 
           FILE=""
@@ -52,7 +52,7 @@ jobs:
 
           # If still empty (e.g., manual re-run), choose the most recently committed JSON under terraform/
           if [[ -z "${FILE:-}" ]]; then
-            FILE="$(git ls-files 'terraform/**/*.json' \
+            FILE="$(git ls-files ''terraform/*.json'' \
                 | xargs -r -I{} bash -c 'echo -e "$(git log -1 --format=%ct -- "{}")\t{}"' \
                 | sort -nr \
                 | head -n 1 \
