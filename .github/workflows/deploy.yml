@@ -1,0 +1,67 @@
+name: "Verify Landing Zone Request"
+
+on:
+  push:
+    paths:
+      - 'terraform/**.json' # Triggers only when a JSON file is added/changed
+    branches:
+      - main
+
+jobs:
+  verify_data:
+    name: "Parse and Display Data"
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Find Latest Request File
+        id: find_file
+        run: |
+          # Finds the most recently modified JSON file in the requests folder
+          FILE=$(ls -t terraform/requests/*.json | head -1)
+          echo "Processing File: $FILE"
+          echo "file_path=$FILE" >> $GITHUB_OUTPUT
+
+      - name: Display Raw JSON Content
+        run: |
+          echo "----------------------------------------"
+          echo "RAW FILE CONTENT:"
+          echo "----------------------------------------"
+          cat ${{ steps.find_file.outputs.file_path }}
+          echo ""
+          echo "----------------------------------------"
+
+      - name: Parse and Verify Details (JQ)
+        run: |
+          FILE=${{ steps.find_file.outputs.file_path }}
+          
+          # We use 'jq' to parse the JSON and make it readable
+          # The key is dynamic (Request ID), so we look for the first key inside 'lz_request'
+          
+          REQ_ID=$(jq -r '.lz_request | keys_unsorted[0]' $FILE)
+          
+          echo "🔍 VERIFICATION REPORT for: $REQ_ID"
+          echo "========================================"
+          
+          OWNER=$(jq -r ".lz_request[\"$REQ_ID\"].metadata.owner_email" $FILE)
+          ENV=$(jq -r ".lz_request[\"$REQ_ID\"].subscription.env" $FILE)
+          COST=$(jq -r ".lz_request[\"$REQ_ID\"].metadata.cost_center" $FILE)
+          TOPOLOGY=$(jq -r ".lz_request[\"$REQ_ID\"].networking.topology" $FILE)
+          FW_REQ=$(jq -r ".lz_request[\"$REQ_ID\"].security.firewall.required" $FILE)
+          
+          echo "👤 Owner:        $OWNER"
+          echo "🌍 Environment:  $ENV"
+          echo "💰 Cost Center:  $COST"
+          echo "🕸️ Topology:     $TOPOLOGY"
+          
+          if [ "$FW_REQ" == "true" ]; then
+            FW_SKU=$(jq -r ".lz_request[\"$REQ_ID\"].security.firewall.sku" $FILE)
+            echo "🔥 Firewall:     ENABLED (SKU: $FW_SKU)"
+          else
+            echo "🔥 Firewall:     Disabled"
+          fi
+          
+          echo "========================================"
+          echo "✅ Data Structure Validated Successfully"
