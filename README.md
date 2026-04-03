@@ -1,3 +1,5 @@
+ <img width="1408" height="768" alt="image" src="https://github.com/user-attachments/assets/3f30822d-2c4b-4183-81af-588c44b6ce1e" />
+
 Azure Landing Zone Automation Framework
 =======================================
 
@@ -86,7 +88,7 @@ terraform plan -var-file="requests/powerapp_input_123.json"
     
 *   **State Locks**: If two users submit simultaneously, the GitHub Action might fail. Ensure "concurrency" is set in your workflow file.
 
- <img width="1408" height="768" alt="image" src="https://github.com/user-attachments/assets/3f30822d-2c4b-4183-81af-588c44b6ce1e" />
+
    
 
 👥 Contributors
